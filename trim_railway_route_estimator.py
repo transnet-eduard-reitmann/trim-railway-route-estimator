@@ -35,7 +35,7 @@ if 'IS_LOCAL_DEV' not in st.session_state:
         st.session_state.IS_LOCAL_DEV = False
 
 # Select number of waypoints to use in GUI
-number_of_waypoints = 4
+number_of_waypoints = 3
 
 # Set page config
 st.set_page_config(
