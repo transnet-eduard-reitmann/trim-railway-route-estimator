@@ -47,6 +47,8 @@ st.set_page_config(
 # Initialise some session state variables
 if 'trip_distance' not in st.session_state:
     st.session_state.trip_distance = "100"  # Set default starting trip distance
+if 'electric_locomotives_select' not in st.session_state:
+    st.session_state.electric_locomotives_select = "No"
 
 # Initialize session state for dataframes (persistent in local dev, temporary in cloud)
 if st.session_state.IS_LOCAL_DEV:
@@ -104,11 +106,22 @@ def clear_graph_data():
         st.info("Local development mode: Graph data kept in memory for performance.")
 
 @st.cache_data(max_entries=1, ttl=3600)  # Cache for 1 hour, max 1 entry
-def load_lz4_data(filename):
-    """Load data from LZ4 compressed file with caching"""
+def load_network_data(filename):
+    """Load data from PKL or LZ4 compressed file with caching"""
     try:
-        if os.path.exists(filename):
-            with lz4.frame.open(filename, 'rb') as f:
+        # Try pkl first for local use and then lz4 for cloud use
+        name, ext = os.path.splitext(filename) 
+        pkl_filename = name + '.pkl'
+        lz4_filename = name + '.lz4'
+        if os.path.exists(pkl_filename):
+            # Try pkl first (fast import)
+            with open(pkl_filename, 'rb') as f:
+                data = pd.read_pickle(f)
+            print(f"Loaded: {pkl_filename}")    
+            return data        
+        elif os.path.exists(lz4_filename):
+            # Try lz4 second (slow import)
+            with lz4.frame.open(lz4_filename, 'rb') as f:
                 data = pd.read_pickle(f)
             return data
         else:
@@ -302,11 +315,11 @@ def calculate_route():
         # Local development: Load once and keep in memory
         if st.session_state.railway_detailed is None:
             with st.spinner("Loading railway network data..."):
-                st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
+                st.session_state.railway_detailed = load_network_data("south_africa_railway_detailed.lz4")
         
         if st.session_state.railway_simple is None:
             with st.spinner("Loading railway network data..."):
-                st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
+                st.session_state.railway_simple = load_network_data("south_africa_railway_simple.lz4")
                 
         railway_detailed = st.session_state.railway_detailed
         railway_simple = st.session_state.railway_simple
@@ -317,8 +330,8 @@ def calculate_route():
     else:
         # Cloud deployment: Load temporarily for calculation
         with st.spinner("Loading railway network data..."):
-            railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
-            railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
+            railway_detailed = load_network_data("south_africa_railway_detailed.lz4")
+            railway_simple = load_network_data("south_africa_railway_simple.lz4")
             
             if railway_detailed is None or railway_simple is None:
                 st.error("Failed to load railway network data")
@@ -406,7 +419,7 @@ def calculate_rate():
         trainkm_rate = np.float64(st.session_state["rate_tariff_per_trainkm_rand"].strip())
         gtk_rate = np.float64(st.session_state["rate_tariff_per_gtk_cents"].strip())
         
-        if st.session_state.electric_locomotives:
+        if st.session_state.electric_locomotives_select == 'Yes':
             e_rate = np.float64(st.session_state["rate_e_rate_per_gtk_cents"].strip())
         else:
             e_rate = 0.0
@@ -657,10 +670,10 @@ def main():
         # In local development, preload heavy graph files for performance
         if st.session_state.IS_LOCAL_DEV:
             if st.session_state.railway_detailed is None:
-                st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
+                st.session_state.railway_detailed = load_network_data("south_africa_railway_detailed.lz4")
             
             if st.session_state.railway_simple is None:
-                st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
+                st.session_state.railway_simple = load_network_data("south_africa_railway_simple.lz4")
     
     # Main content area
     col1, col2 = st.columns(2)
@@ -684,28 +697,36 @@ def main():
             return ""
         
         for i in range(1, number_of_waypoints + 1):
-            if waypoint_names:
-                selected_waypoint = st.selectbox(
-                    f"Waypoint {i}:",
-                    options=[""] + waypoint_names,
-                    key=f"waypoint_select_{i}",
-                    help=f"Select waypoint {i} for routing"
-                )
-            else:
-                selected_waypoint = st.selectbox(
-                    f"Waypoint {i}:",
-                    options=["No waypoints available"],
-                    key=f"waypoint_select_{i}",
-                    disabled=True
+            
+            cols = st.columns([4, 3, 1])
+            
+            with cols[0]:
+                if waypoint_names:
+                    selected_waypoint = st.selectbox(
+                        f"Waypoint {i}:",
+                        options=[""] + waypoint_names,
+                        key=f"waypoint_select_{i}",
+                        help=f"Select waypoint {i} for routing"
+                    )
+                else:
+                    selected_waypoint = st.selectbox(
+                        f"Waypoint {i}:",
+                        options=["No waypoints available"],
+                        key=f"waypoint_select_{i}",
+                        disabled=True
+                    )                
+                coordinates_value = get_waypoint_coordinates(selected_waypoint) if selected_waypoint else ""
+            
+            with cols[1]:
+                st.text_input(
+                    f"Coordinates {i} (Lat, Lon):",
+                    value=coordinates_value,
+                    key=f"coordinates_input_{i}",
+                    help="Format: latitude, longitude"
                 )
             
-            coordinates_value = get_waypoint_coordinates(selected_waypoint) if selected_waypoint else ""
-            st.text_input(
-                f"Coordinates {i} (Lat, Lon):",
-                value=coordinates_value,
-                key=f"coordinates_input_{i}",
-                help="Format: latitude, longitude"
-            )
+            with cols[2]:
+                st.button("🗺️", key=f"pick_coordinate_button_{i}")                
             
             if i < number_of_waypoints:
                 st.markdown("")
@@ -724,20 +745,28 @@ def main():
         access_categories = []
         selected_category = None
         
+        cols = st.columns([3, 1])
+        
         if st.session_state.access_rates_df is not None:
             if 'Category' in st.session_state.access_rates_df.columns:
                 access_categories = st.session_state.access_rates_df['Category'].unique().tolist()
-                selected_category = st.selectbox(
-                    "Select Access Rate Category:",
-                    options=access_categories,
-                    key="access_rate_select"
-                )
+                with cols[0]:
+                    selected_category = st.selectbox(
+                        "Select Access Rate Category:",
+                        options=access_categories,
+                        key="access_rate_select"
+                    )
             else:
                 st.error("'Category' column not found in access rates data")
         else:
             st.error("Access rates data not loaded")
         
-        st.checkbox("Electric locomotives:", key="electric_locomotives")
+        with cols[1]:
+            st.selectbox(
+                "Electric locomotives:",
+                options=['Yes', 'No'],
+                key="electric_locomotives_select"
+            )
         
         st.markdown("")
         
@@ -752,13 +781,17 @@ def main():
                 "E Rate per GTK (Cents)"
             ]
             
+            cols = st.columns(len(required_columns))
+            k = 0            
             for col_name in required_columns:
-                if col_name in rate_data:
-                    st.text_input(
-                        col_name,
-                        value=str(rate_data[col_name]),
-                        key=f"rate_{col_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
-                    )
+                if col_name in rate_data:                    
+                    with cols[k]:
+                        k = k + 1
+                        st.text_input(
+                            col_name,
+                            value=str(rate_data[col_name]),
+                            key=f"rate_{col_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
+                        )
                 else:
                     st.error(f"Column '{col_name}' not found in access rates data")
         else:
@@ -775,24 +808,30 @@ def main():
             key="trip_distance",
             help="Total trip distance in km"
         ) 
-        st.text_input(
-            "Loaded train mass [ton]:",
-            value="1000",
-            key="loaded_train_mass",
-            help="Empty train mass in ton"
-        )
-        st.text_input(
-            "Empty train mass [ton]:",
-            value="500",
-            key="empty_train_mass",
-            help="Empty train massin ton"
-        )
-        st.text_input(
-            "Annual volume [ton]:",
-            value="20000",
-            key="annual_volume",
-            help="Annual volume in ton"
-        )
+        
+        cols = st.columns(3)
+         
+        with cols[0]:
+            st.text_input(
+                "Loaded train mass [ton]:",
+                value="1000",
+                key="loaded_train_mass",
+                help="Empty train mass in ton"
+            )
+        with cols[1]:    
+            st.text_input(
+                "Empty train mass [ton]:",
+                value="500",
+                key="empty_train_mass",
+                help="Empty train massin ton"
+            )
+        with cols[2]:
+            st.text_input(
+                "Annual volume [ton]:",
+                value="20000",
+                key="annual_volume",
+                help="Annual volume in ton"
+            )
          
         st.markdown("")
         if st.button("💲 Calculate Rate", key="calculate_rate_btn", use_container_width=True):
@@ -801,7 +840,7 @@ def main():
         if st.session_state.rates_calculation_result:
             st.markdown(st.session_state.rates_calculation_result) 
             
-            st.checkbox("Display breakdown of rates calculation results:", value=True, key="display_breakdown")
+            st.checkbox("Display breakdown of rates calculation results:", value=False, key="display_breakdown")
     
     # Show route distance if calculated
     if st.session_state.route_calculated and st.session_state.route_distance:
