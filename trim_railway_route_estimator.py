@@ -20,7 +20,7 @@ if 'THUNDERFOREST_API_KEY' not in st.session_state:
         st.success("THUNDERFOREST_API_KEY loaded successfully!")
     else:
         st.session_state.THUNDERFOREST_API_KEY = None
-        st.error("No THUNDERFOREST_API_KEY available!")
+        st.info("No THUNDERFOREST_API_KEY available!")
 
 # Check if running locally (create a local_config.py file for local development)
 if 'IS_LOCAL_DEV' not in st.session_state:
@@ -379,7 +379,7 @@ def calculate_route():
         
         st.session_state.route_calculation_result = result_text       
         
-        st.success(f"Route calculation success!")
+        st.success("Route calculation success!")
                 
         # Perform automatic rate calculation
         st.session_state.trip_distance = f"{total_length/1000:.2f}"
@@ -771,24 +771,24 @@ def main():
                 ) 
           
         st.text_input(
-            f"Trip distance [km]:",            
+            "Trip distance [km]:",            
             key="trip_distance",
             help="Total trip distance in km"
         ) 
         st.text_input(
-            f"Loaded train mass [ton]:",
+            "Loaded train mass [ton]:",
             value="1000",
             key="loaded_train_mass",
             help="Empty train mass in ton"
         )
         st.text_input(
-            f"Empty train mass [ton]:",
+            "Empty train mass [ton]:",
             value="500",
             key="empty_train_mass",
             help="Empty train massin ton"
         )
         st.text_input(
-            f"Annual volume [ton]:",
+            "Annual volume [ton]:",
             value="20000",
             key="annual_volume",
             help="Annual volume in ton"
