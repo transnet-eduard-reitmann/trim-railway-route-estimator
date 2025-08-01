@@ -9,17 +9,30 @@ import osmnx as ox
 from geopy.distance import geodesic
 import hashlib
 import numpy as np
+import gc  # Garbage collection
 
 
-# Load Thunderforest API key
+# Load Thunderforest API key and check for local development
 if 'THUNDERFOREST_API_KEY' not in st.session_state:
     if os.path.exists('thunderforest_key.py'):
         from thunderforest_key import THUNDERFOREST_API_KEY    
         st.session_state.THUNDERFOREST_API_KEY = THUNDERFOREST_API_KEY    
-        print('THUNDERFOREST_API_KEY loaded successfully...')
+        st.success("THUNDERFOREST_API_KEY loaded successfully!")
     else:
         st.session_state.THUNDERFOREST_API_KEY = None
-        print('No THUNDERFOREST_API_KEY available...')
+        st.error("No THUNDERFOREST_API_KEY available!")
+
+# Check if running locally (create a local_config.py file for local development)
+if 'IS_LOCAL_DEV' not in st.session_state:
+    if os.path.exists('local_config.py'):
+        try:
+            from local_config import IS_LOCAL_DEVELOPMENT
+            st.session_state.IS_LOCAL_DEV = IS_LOCAL_DEVELOPMENT
+            st.success("🏠 Local development mode detected - Enhanced performance enabled!")
+        except ImportError:
+            st.session_state.IS_LOCAL_DEV = False
+    else:
+        st.session_state.IS_LOCAL_DEV = False
 
 # Select number of waypoints to use in GUI
 number_of_waypoints = 4
@@ -31,11 +44,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state for dataframes
-if 'railway_detailed' not in st.session_state:
-    st.session_state.railway_detailed = None
-if 'railway_simple' not in st.session_state:
-    st.session_state.railway_simple = None
+# Initialise some session state variables
+if 'trip_distance' not in st.session_state:
+    st.session_state.trip_distance = "100"  # Set default starting trip distance
+
+# Initialize session state for dataframes (persistent in local dev, temporary in cloud)
+if st.session_state.IS_LOCAL_DEV:
+    # Local development: Keep graphs in memory for performance
+    if 'railway_detailed' not in st.session_state:
+        st.session_state.railway_detailed = None
+    if 'railway_simple' not in st.session_state:
+        st.session_state.railway_simple = None
+
 if 'waypoints_df' not in st.session_state:
     st.session_state.waypoints_df = None    
 if 'route_calculation_result' not in st.session_state:
@@ -47,17 +67,17 @@ if 'rates_calculation_result' not in st.session_state:
 if 'rates_calculation_df' not in st.session_state:
     st.session_state.rates_calculation_df = None    
 
-# Route data persistence
+# Route data persistence (keep lightweight data only)
 if 'route_calculated' not in st.session_state:
     st.session_state.route_calculated = False
 if 'route_points' not in st.session_state:
     st.session_state.route_points = None
 if 'route_coords' not in st.session_state:
     st.session_state.route_coords = None
-if 'route_nodes' not in st.session_state:
-    st.session_state.route_nodes = None
 if 'route_distance' not in st.session_state:
     st.session_state.route_distance = None
+if 'route_geometries' not in st.session_state:
+    st.session_state.route_geometries = None
 
 # Map caching and persistence
 if 'cached_map_html' not in st.session_state:
@@ -67,8 +87,25 @@ if 'map_cache_key' not in st.session_state:
 if 'map_needs_update' not in st.session_state:
     st.session_state.map_needs_update = True
 
+def clear_graph_data():
+    """Clear graph data from memory to free up space (only in cloud deployment)"""
+    if not st.session_state.IS_LOCAL_DEV:
+        # Only clear in cloud deployment
+        if hasattr(st.session_state, 'railway_detailed'):
+            delattr(st.session_state, 'railway_detailed')
+        if hasattr(st.session_state, 'railway_simple'):
+            delattr(st.session_state, 'railway_simple')
+        
+        # Force garbage collection
+        gc.collect()
+        
+        st.info("Graph data cleared from memory to free up resources.")
+    else:
+        st.info("Local development mode: Graph data kept in memory for performance.")
+
+@st.cache_data(max_entries=1, ttl=3600)  # Cache for 1 hour, max 1 entry
 def load_lz4_data(filename):
-    """Load data from LZ4 compressed file"""
+    """Load data from LZ4 compressed file with caching"""
     try:
         if os.path.exists(filename):
             with lz4.frame.open(filename, 'rb') as f:
@@ -81,8 +118,9 @@ def load_lz4_data(filename):
         st.error(f"Error loading {filename}: {str(e)}")
         return None
 
+@st.cache_data(max_entries=2, ttl=7200)  # Cache for 2 hours
 def load_excel_data(filename):
-    """Load data from Excel file"""
+    """Load data from Excel file with caching"""
     try:
         if os.path.exists(filename):
             df = pd.read_excel(filename)
@@ -188,183 +226,8 @@ def calculate_od_pairs_hybrid(G_simple, G_detailed, nodes):
 
     return simple_full_route, detailed_full_route, total_accurate_distance, simple_distance, segment_distances
 
-def generate_cache_key():
-    """Generate a cache key based on current route data"""
-    if not st.session_state.route_calculated:
-        return "no_route"
-    
-    # Create a hash of the route data
-    route_data = {
-        'points': st.session_state.route_points,
-        'coords': st.session_state.route_coords,
-        'nodes': st.session_state.route_nodes,
-        'distance': st.session_state.route_distance
-    }
-    
-    cache_string = str(route_data)
-    return hashlib.md5(cache_string.encode()).hexdigest()
-
-def calculate_route():
-    """Calculate route and store data in session state"""
-    
-    # Parse location inputs
-    locations = []
-    valid_inputs = []
-    
-    for i in range(1, number_of_waypoints + 1): 
-        text = st.session_state[f"coordinates_input_{i}"]
-        if not text:
-            continue
-
-        coords = parse_location_input(text)
-        if coords is not None:
-            locations.append(coords)
-            valid_inputs.append(i+1)
-            continue
-    
-    if len(locations) < 2:
-        st.error("Insufficient Locations. You must provide at least 2 valid locations to calculate a route.")
-        return
-
-    if st.session_state.railway_detailed is None:
-        st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
-    
-    if st.session_state.railway_simple is None:
-        st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
-        
-    # Snap points to railway graph
-    points = []
-    nodes = []
-    coords = []
-    snap_distances = []
-
-    for i, point in enumerate(locations):
-        node = ox.distance.nearest_nodes(st.session_state.railway_simple, X=point[1], Y=point[0])
-        node_coords = (st.session_state.railway_simple.nodes[node]['y'], st.session_state.railway_simple.nodes[node]['x'])
-        snap_dist = geodesic(point, node_coords).meters
-
-        points.append(point)
-        nodes.append(node)
-        coords.append(node_coords)
-        snap_distances.append(snap_dist)
-
-    # Calculate route using hybrid approach
-    try:
-        simple_route, full_route, total_length, simple_distance, segment_distances = calculate_od_pairs_hybrid(
-            st.session_state.railway_simple, st.session_state.railway_detailed, nodes
-        )
-
-        if simple_route is None:
-            st.error("Error. No railway path found between the specified points.")
-            return
-        
-        # Store route data in session state
-        st.session_state.route_calculated = True
-        st.session_state.route_points = points
-        st.session_state.route_coords = coords
-        st.session_state.route_nodes = simple_route
-        st.session_state.route_distance = total_length
-        
-        # Mark that map needs update
-        st.session_state.map_needs_update = True        
-        
-        # Update results label
-        result_text = (
-            f"**Route Summary:**  \n"
-            f"Total distance: {total_length/1000:.2f} km  \n"  
-        )
-        
-        for i, dist in enumerate(segment_distances):
-            result_text += f"Segment {i+1}: {dist/1000:.2f} km  \n"
-
-        for i, dist in enumerate(snap_distances):
-            result_text += f"Snap distance {valid_inputs[i]}: {dist:.0f} m  \n"
-        result_text = result_text[:-2]
-        
-        st.session_state.route_calculation_result = result_text
-                
-        st.session_state.trip_distance = f"{total_length/1000:.2f}"
-        
-        st.success(f"Route calculation success!")
-        
-        # Perform automatic rate calculation
-        calculate_rate()        
-
-    except Exception as e:
-        st.error(f"Error. Failed to calculate route: {str(e)}")
-
-def calculate_rate():
-    """Placeholder function for rate calculation""" 
-    trip_distance = np.float64(st.session_state["trip_distance"].strip())
-    trainkm_rate = np.float64(st.session_state["rate_tariff_per_trainkm_rand"].strip())
-    gtk_rate = np.float64(st.session_state["rate_tariff_per_gtk_cents"].strip())
-    
-    if st.session_state.electric_locomotives:
-        e_rate = np.float64(st.session_state["rate_e_rate_per_gtk_cents"].strip())
-    else:
-        e_rate = 0.0
-                
-    loaded_train_mass = np.float64(st.session_state["loaded_train_mass"].strip())
-    empty_train_mass = np.float64(st.session_state["empty_train_mass"].strip())
-    annual_volume = np.float64(st.session_state["annual_volume"].strip()) 
-                 
-    payload_per_train = loaded_train_mass - empty_train_mass
-    whole_trips_required = np.ceil(annual_volume / payload_per_train)        
-        
-    revenue = pd.DataFrame(columns=['Loaded', 'Empty']) 
-    # revenue.loc['Train mass [ton]'] = [loaded_train_mass, empty_train_mass] 
-    # revenue.loc['Whole trips'] = [whole_trips_required, whole_trips_required]
-    revenue.loc['GTK per trip'] = [loaded_train_mass * trip_distance, empty_train_mass * trip_distance]
-    revenue.loc['Train.km revenue per trip'] = [trainkm_rate * trip_distance, trainkm_rate * trip_distance]
-    revenue.loc['GTK revenue per trip'] = revenue.loc['GTK per trip'] * gtk_rate / 100
-    revenue.loc['E-Rate revenue per trip'] = revenue.loc['GTK per trip'] * e_rate / 100
-    revenue.loc['Total revenue per trip'] = revenue.loc[['Train.km revenue per trip', 'GTK revenue per trip', 'E-Rate revenue per trip'], :].sum()
-    revenue.loc['Train.km revenue per annum'] = revenue.loc['Train.km revenue per trip'] * whole_trips_required
-    revenue.loc['GTK revenue per annum'] = revenue.loc['GTK revenue per trip'] * whole_trips_required
-    revenue.loc['E-Rate revenue per annum'] = revenue.loc['E-Rate revenue per trip'] * whole_trips_required
-    revenue.loc['Total revenue per annum'] = revenue.loc[['Train.km revenue per annum', 'GTK revenue per annum', 'E-Rate revenue per annum'], :].sum()
-    revenue['Combined'] = revenue['Empty'] + revenue['Loaded']
-    total_revenue_per_annum = revenue.loc['Total revenue per annum', 'Combined']
-    
-    result_text = "**Calculation Summary:**  \n"
-    result_text += f"Payload per train [ton]: {payload_per_train}  \n"
-    result_text += f"Whole trips required to achieve annual volume: {whole_trips_required:.0f}  \n"           
-    result_text += f"Total revenue per annum: R {total_revenue_per_annum:,.2f}"
-    
-    st.session_state.rates_calculation_result = result_text
-    
-    gtk_per_trip = revenue.loc[['GTK per trip']] 
-    revenue_per_trip = revenue.loc[['Train.km revenue per trip', 'GTK revenue per trip', 'E-Rate revenue per trip', 'Total revenue per trip']]
-    revenue_per_annum = revenue.loc[['Train.km revenue per annum', 'GTK revenue per annum', 'E-Rate revenue per annum', 'Total revenue per annum']]
-    
-    def format_thousands(x):
-        try:
-            return f"{x:,.0f}".replace(",", " ")
-        except:
-            return x
-    
-    # Format function: Rand with space thousands separator, no decimals
-    def format_rands(x):
-        try:
-            return f"R {x:,.2f}".replace(",", " ")
-        except:
-            return x
-    
-    # Apply formatting using Styler 
-    styled_gtk_per_trip = gtk_per_trip.style.format({col: format_thousands for col in gtk_per_trip.select_dtypes(include=np.number).columns})
-    styled_revenue_per_trip = revenue_per_trip.style.format({col: format_rands for col in revenue_per_trip.select_dtypes(include=np.number).columns})
-    styled_revenue_per_annum = revenue_per_annum.style.format({col: format_rands for col in revenue_per_annum.select_dtypes(include=np.number).columns})    
-    
-    st.session_state.rates_calculation_df = [styled_gtk_per_trip, styled_revenue_per_trip, styled_revenue_per_annum]
-        
-    # # Write results to xlsx
-    # revenue.to_excel('results.xlsx')
-    
-    st.success("Rate calculation success!")
-    
-
 def get_route_geometry_improved(graph, route_nodes):
-    """Get the geometry of a route"""
+    """Get the geometry of a route and return lightweight coordinate data"""
     route_geometries = []
 
     for i in range(len(route_nodes) - 1):
@@ -397,15 +260,222 @@ def get_route_geometry_improved(graph, route_nodes):
 
     return route_geometries    
 
-@st.cache_data
-def create_cached_map_html(_railway_simple, route_data):
+def generate_cache_key():
+    """Generate a cache key based on current route data"""
+    if not st.session_state.route_calculated:
+        return "no_route"
+    
+    # Create a hash of the route data
+    route_data = {
+        'points': st.session_state.route_points,
+        'coords': st.session_state.route_coords,
+        'distance': st.session_state.route_distance
+    }
+    
+    cache_string = str(route_data)
+    return hashlib.md5(cache_string.encode()).hexdigest()
+
+def calculate_route():
+    """Calculate route and store minimal data in session state"""
+    
+    # Parse location inputs
+    locations = []
+    valid_inputs = []
+    
+    for i in range(1, number_of_waypoints + 1): 
+        text = st.session_state[f"coordinates_input_{i}"]
+        if not text:
+            continue
+
+        coords = parse_location_input(text)
+        if coords is not None:
+            locations.append(coords)
+            valid_inputs.append(i+1)
+            continue
+    
+    if len(locations) < 2:
+        st.error("Insufficient Locations. You must provide at least 2 valid locations to calculate a route.")
+        return
+
+    # Handle graph loading based on environment
+    if st.session_state.IS_LOCAL_DEV:
+        # Local development: Load once and keep in memory
+        if st.session_state.railway_detailed is None:
+            with st.spinner("Loading railway network data..."):
+                st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
+        
+        if st.session_state.railway_simple is None:
+            with st.spinner("Loading railway network data..."):
+                st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
+                
+        railway_detailed = st.session_state.railway_detailed
+        railway_simple = st.session_state.railway_simple
+        
+        if railway_detailed is None or railway_simple is None:
+            st.error("Failed to load railway network data")
+            return
+    else:
+        # Cloud deployment: Load temporarily for calculation
+        with st.spinner("Loading railway network data..."):
+            railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
+            railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
+            
+            if railway_detailed is None or railway_simple is None:
+                st.error("Failed to load railway network data")
+                return
+        
+    try:
+        # Snap points to railway graph
+        points = []
+        nodes = []
+        coords = []
+        snap_distances = []
+
+        for i, point in enumerate(locations):
+            node = ox.distance.nearest_nodes(railway_simple, X=point[1], Y=point[0])
+            node_coords = (railway_simple.nodes[node]['y'], railway_simple.nodes[node]['x'])
+            snap_dist = geodesic(point, node_coords).meters
+
+            points.append(point)
+            nodes.append(node)
+            coords.append(node_coords)
+            snap_distances.append(snap_dist)
+
+        # Calculate route using hybrid approach
+        simple_route, full_route, total_length, simple_distance, segment_distances = calculate_od_pairs_hybrid(
+            railway_simple, railway_detailed, nodes
+        )
+
+        if simple_route is None:
+            st.error("Error. No railway path found between the specified points.")
+            return
+        
+        # Get route geometries for map display (before clearing graph data)
+        G_latlon = ox.project_graph(railway_simple, to_crs='EPSG:4326')
+        route_geometries = get_route_geometry_improved(G_latlon, simple_route)
+        
+        # Store minimal route data in session state
+        st.session_state.route_calculated = True
+        st.session_state.route_points = points
+        st.session_state.route_coords = coords
+        st.session_state.route_distance = total_length
+        st.session_state.route_geometries = route_geometries  # Store lightweight geometry data
+        
+        # Mark that map needs update
+        st.session_state.map_needs_update = True        
+        
+        # Update results label
+        result_text = (
+            f"**Route Summary:**  \n"
+            f"Total distance: {total_length/1000:.2f} km  \n"  
+        )
+        
+        for i, dist in enumerate(segment_distances):
+            result_text += f"Segment {i+1}: {dist/1000:.2f} km  \n"
+
+        for i, dist in enumerate(snap_distances):
+            result_text += f"Snap distance {valid_inputs[i]}: {dist:.0f} m  \n"
+        result_text = result_text[:-2]
+        
+        st.session_state.route_calculation_result = result_text       
+        
+        st.success(f"Route calculation success!")
+                
+        # Perform automatic rate calculation
+        st.session_state.trip_distance = f"{total_length/1000:.2f}"
+        calculate_rate()        
+
+    except Exception as e:
+        st.error(f"Error. Failed to calculate route: {str(e)}")
+    finally:
+        # Only clear graph data in cloud deployment
+        if not st.session_state.IS_LOCAL_DEV:
+            del railway_detailed, railway_simple, G_latlon
+            gc.collect()
+            st.info("Railway network data cleared from memory.")
+        else:
+            # In local dev, just clean up the temporary G_latlon
+            if 'G_latlon' in locals():
+                del G_latlon
+                gc.collect()
+
+def calculate_rate():
+    """Calculate rates based on route distance and parameters""" 
+    try:
+        trip_distance = np.float64(st.session_state["trip_distance"].strip())
+        trainkm_rate = np.float64(st.session_state["rate_tariff_per_trainkm_rand"].strip())
+        gtk_rate = np.float64(st.session_state["rate_tariff_per_gtk_cents"].strip())
+        
+        if st.session_state.electric_locomotives:
+            e_rate = np.float64(st.session_state["rate_e_rate_per_gtk_cents"].strip())
+        else:
+            e_rate = 0.0
+                    
+        loaded_train_mass = np.float64(st.session_state["loaded_train_mass"].strip())
+        empty_train_mass = np.float64(st.session_state["empty_train_mass"].strip())
+        annual_volume = np.float64(st.session_state["annual_volume"].strip()) 
+                     
+        payload_per_train = loaded_train_mass - empty_train_mass
+        whole_trips_required = np.ceil(annual_volume / payload_per_train)        
+            
+        revenue = pd.DataFrame(columns=['Loaded', 'Empty']) 
+        revenue.loc['GTK per trip'] = [loaded_train_mass * trip_distance, empty_train_mass * trip_distance]
+        revenue.loc['Train.km revenue per trip'] = [trainkm_rate * trip_distance, trainkm_rate * trip_distance]
+        revenue.loc['GTK revenue per trip'] = revenue.loc['GTK per trip'] * gtk_rate / 100
+        revenue.loc['E-Rate revenue per trip'] = revenue.loc['GTK per trip'] * e_rate / 100
+        revenue.loc['Total revenue per trip'] = revenue.loc[['Train.km revenue per trip', 'GTK revenue per trip', 'E-Rate revenue per trip'], :].sum()
+        revenue.loc['Train.km revenue per annum'] = revenue.loc['Train.km revenue per trip'] * whole_trips_required
+        revenue.loc['GTK revenue per annum'] = revenue.loc['GTK revenue per trip'] * whole_trips_required
+        revenue.loc['E-Rate revenue per annum'] = revenue.loc['E-Rate revenue per trip'] * whole_trips_required
+        revenue.loc['Total revenue per annum'] = revenue.loc[['Train.km revenue per annum', 'GTK revenue per annum', 'E-Rate revenue per annum'], :].sum()
+        revenue['Combined'] = revenue['Empty'] + revenue['Loaded']
+        total_revenue_per_annum = revenue.loc['Total revenue per annum', 'Combined']
+        
+        result_text = "**Calculation Summary:**  \n"
+        result_text += f"Payload per train [ton]: {payload_per_train}  \n"
+        result_text += f"Whole trips required to achieve annual volume: {whole_trips_required:.0f}  \n"           
+        result_text += f"Total revenue per annum: R {total_revenue_per_annum:,.2f}"
+        
+        st.session_state.rates_calculation_result = result_text
+        
+        gtk_per_trip = revenue.loc[['GTK per trip']] 
+        revenue_per_trip = revenue.loc[['Train.km revenue per trip', 'GTK revenue per trip', 'E-Rate revenue per trip', 'Total revenue per trip']]
+        revenue_per_annum = revenue.loc[['Train.km revenue per annum', 'GTK revenue per annum', 'E-Rate revenue per annum', 'Total revenue per annum']]
+        
+        def format_thousands(x):
+            try:
+                return f"{x:,.0f}".replace(",", " ")
+            except:
+                return x
+        
+        # Format function: Rand with space thousands separator, no decimals
+        def format_rands(x):
+            try:
+                return f"R {x:,.2f}".replace(",", " ")
+            except:
+                return x
+        
+        # Apply formatting using Styler 
+        styled_gtk_per_trip = gtk_per_trip.style.format({col: format_thousands for col in gtk_per_trip.select_dtypes(include=np.number).columns})
+        styled_revenue_per_trip = revenue_per_trip.style.format({col: format_rands for col in revenue_per_trip.select_dtypes(include=np.number).columns})
+        styled_revenue_per_annum = revenue_per_annum.style.format({col: format_rands for col in revenue_per_annum.select_dtypes(include=np.number).columns})    
+        
+        st.session_state.rates_calculation_df = [styled_gtk_per_trip, styled_revenue_per_trip, styled_revenue_per_annum]
+            
+        st.success("Rate calculation success!")
+        
+    except Exception as e:
+        st.error(f"Error in rate calculation: {str(e)}")
+
+@st.cache_data(max_entries=2, ttl=3600)  # Cache map HTML for 1 hour
+def create_cached_map_html(route_data, thunderforest_key):
     """Create and cache the map HTML using route data"""
     if not route_data or not route_data.get('calculated', False):
-        return create_default_map_html()
+        return create_default_map_html(thunderforest_key)
     
     points = route_data['points']
     coords = route_data['coords'] 
-    route_nodes = route_data['nodes']
+    route_geometries = route_data['geometries']
     
     # Create a new map centered on the route
     center_lat = (points[0][0] + points[-1][0]) / 2
@@ -428,27 +498,21 @@ def create_cached_map_html(_railway_simple, route_data):
         control=True
     ).add_to(m)        
 
-    if st.session_state.THUNDERFOREST_API_KEY:
+    if thunderforest_key:
         folium.TileLayer(
-            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={st.session_state.THUNDERFOREST_API_KEY}",
+            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={thunderforest_key}",
             attr='Transport Map © Thunderforest, OpenStreetMap contributors',
             name='Transport Map',
             overlay=False,
             control=True
         ).add_to(m)
 
-    # Convert graph to latitude-longitude
-    G_latlon = ox.project_graph(_railway_simple, to_crs='EPSG:4326')
-
-    # Get route geometries
-    route_geometries = get_route_geometry_improved(G_latlon, route_nodes)
-
     # Create feature groups
     route_group = folium.FeatureGroup(name="Railway Route", show=True)
     location_markers_group = folium.FeatureGroup(name="Locations", show=True)
     snapped_markers_group = folium.FeatureGroup(name="Snapped Points", show=True)
 
-    # Plot the railway route
+    # Plot the railway route using stored geometries
     if route_geometries:
         for geometry in route_geometries:
             folium.PolyLine(
@@ -457,15 +521,6 @@ def create_cached_map_html(_railway_simple, route_data):
                 weight=5,
                 opacity=0.8,
             ).add_to(route_group)
-    else:
-        route_nodes_data = [G_latlon.nodes[node] for node in route_nodes]
-        route_coords = [(node['y'], node['x']) for node in route_nodes_data]
-        folium.PolyLine(
-            route_coords,
-            color='red',
-            weight=5,
-            opacity=0.8,
-        ).add_to(route_group)
 
     # Add location markers
     for i, point in enumerate(points):
@@ -501,8 +556,8 @@ def create_cached_map_html(_railway_simple, route_data):
     
     return m._repr_html_()
 
-@st.cache_data
-def create_default_map_html():
+@st.cache_data(max_entries=1, ttl=7200)  # Cache default map for 2 hours
+def create_default_map_html(thunderforest_key):
     """Create default map HTML without route"""
     center_lat, center_lon = -29.0, 24.0
     m = folium.Map(
@@ -527,9 +582,9 @@ def create_default_map_html():
         control=True
     ).add_to(m)        
 
-    if st.session_state.THUNDERFOREST_API_KEY:
+    if thunderforest_key:
         folium.TileLayer(
-            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={st.session_state.THUNDERFOREST_API_KEY}",
+            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={thunderforest_key}",
             attr='Transport Map © Thunderforest, OpenStreetMap contributors',
             name='Transport Map',
             overlay=False,
@@ -553,14 +608,16 @@ def get_map_html():
                 'calculated': True,
                 'points': st.session_state.route_points,
                 'coords': st.session_state.route_coords,
-                'nodes': st.session_state.route_nodes,
+                'geometries': st.session_state.route_geometries,
                 'distance': st.session_state.route_distance
             }
             st.session_state.cached_map_html = create_cached_map_html(
-                st.session_state.railway_simple, route_data
+                route_data, st.session_state.THUNDERFOREST_API_KEY
             )
         else:
-            st.session_state.cached_map_html = create_default_map_html()
+            st.session_state.cached_map_html = create_default_map_html(
+                st.session_state.THUNDERFOREST_API_KEY
+            )
         
         # Update cache key and reset update flag
         st.session_state.map_cache_key = current_cache_key
@@ -573,19 +630,37 @@ def main():
     st.title("🚂 TRIM Railway Route Estimator")
     st.markdown("---")
     
+    # Add memory management section
+    col_mem1, col_mem2 = st.columns([3, 1])
+    with col_mem1:
+        if st.session_state.IS_LOCAL_DEV:
+            st.info("🏠 **Local Development Mode**: Network files kept in memory for maximum performance.")
+        else:
+            st.info("☁️ **Cloud Mode**: Network files loaded temporarily during calculations to optimize memory usage.")
+    with col_mem2:
+        if st.button("🗑️ Clear Cache", help="Clear all cached data to free memory"):
+            st.cache_data.clear()
+            clear_graph_data()
+            st.session_state.cached_map_html = None
+            st.session_state.map_needs_update = True
+            st.success("Cache cleared!")
+    
     # Load data files
-    with st.spinner("Loading data files..."):
-        if st.session_state.railway_detailed is None:
-            st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
-        
-        if st.session_state.railway_simple is None:
-            st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
-        
+    with st.spinner("Loading configuration files..."):
+        # Always load lightweight config files
         if st.session_state.waypoints_df is None:
             st.session_state.waypoints_df = load_excel_data("waypoints.xlsx")
         
         if st.session_state.access_rates_df is None:
             st.session_state.access_rates_df = load_excel_data("access_rates.xlsx")
+        
+        # In local development, preload heavy graph files for performance
+        if st.session_state.IS_LOCAL_DEV:
+            if st.session_state.railway_detailed is None:
+                st.session_state.railway_detailed = load_lz4_data("south_africa_railway_detailed.lz4")
+            
+            if st.session_state.railway_simple is None:
+                st.session_state.railway_simple = load_lz4_data("south_africa_railway_simple.lz4")
     
     # Main content area
     col1, col2 = st.columns(2)
@@ -640,7 +715,6 @@ def main():
             calculate_route()
             
         if st.session_state.route_calculation_result:
-            
             st.markdown(st.session_state.route_calculation_result)    
             
     # Access rates information
@@ -697,8 +771,7 @@ def main():
                 ) 
           
         st.text_input(
-            f"Trip distance [km]:",
-            value="100",
+            f"Trip distance [km]:",            
             key="trip_distance",
             help="Total trip distance in km"
         ) 
@@ -726,20 +799,19 @@ def main():
             calculate_rate()
             
         if st.session_state.rates_calculation_result:
-            
             st.markdown(st.session_state.rates_calculation_result) 
             
-            st.checkbox("Display breakdown of rates calculation results:", key="display_breakdown")
+            st.checkbox("Display breakdown of rates calculation results:", value=True, key="display_breakdown")
     
     # Show route distance if calculated
     if st.session_state.route_calculated and st.session_state.route_distance:
-        st.info(f"Current route distance: {st.session_state.route_distance/1000:.2f} km")    
-    
+        st.info(f"Current route distance: {st.session_state.route_distance/1000:.2f} km")
+        
     # Detailed breakdown of rates calculation (dataframe)
     if st.session_state.rates_calculation_result and st.session_state.display_breakdown:
         st.dataframe(st.session_state.rates_calculation_df[0]) 
         st.dataframe(st.session_state.rates_calculation_df[1]) 
-        st.dataframe(st.session_state.rates_calculation_df[2])              
+        st.dataframe(st.session_state.rates_calculation_df[2])    
     
     # Full-width map section
     st.markdown("---")
@@ -747,12 +819,7 @@ def main():
     
     # Display cached map HTML
     map_html = get_map_html()
-    st.components.v1.html(map_html, height=600)
-    
-    # # Or loop through items
-    # for key, value in st.session_state.items():
-    #     st.write(f"{key}: {value}")
-    
+    st.components.v1.html(map_html, height=600)    
 
 if __name__ == "__main__":
     main()

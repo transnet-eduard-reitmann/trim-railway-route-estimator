@@ -1,4 +1,6 @@
+/__pycache__/
+/_Development/
+/_Backups/
 thunderforest_key.py
 _local_launcher.py
-/_Development/
-/__pycache__/
+local_config.py
