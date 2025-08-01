@@ -12,12 +12,16 @@ import numpy as np
 
 
 # Load Thunderforest API key
-if os.path.exists('thunderforest_key.py'):
-    from thunderforest_key import THUNDERFOREST_API_KEY
-    print('THUNDERFOREST_API_KEY loaded successfully...')
-else:
-    print('No THUNDERFOREST_API_KEY available...')
+if 'THUNDERFOREST_API_KEY' not in st.session_state:
+    if os.path.exists('thunderforest_key.py'):
+        from thunderforest_key import THUNDERFOREST_API_KEY    
+        st.session_state.THUNDERFOREST_API_KEY = THUNDERFOREST_API_KEY    
+        print('THUNDERFOREST_API_KEY loaded successfully...')
+    else:
+        st.session_state.THUNDERFOREST_API_KEY = None
+        print('No THUNDERFOREST_API_KEY available...')
 
+# Select number of waypoints to use in GUI
 number_of_waypoints = 4
 
 # Set page config
@@ -424,9 +428,9 @@ def create_cached_map_html(_railway_simple, route_data):
         control=True
     ).add_to(m)        
 
-    if 'THUNDERFOREST_API_KEY' in globals() and THUNDERFOREST_API_KEY:
+    if st.session_state.THUNDERFOREST_API_KEY:
         folium.TileLayer(
-            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={THUNDERFOREST_API_KEY}",
+            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={st.session_state.THUNDERFOREST_API_KEY}",
             attr='Transport Map © Thunderforest, OpenStreetMap contributors',
             name='Transport Map',
             overlay=False,
@@ -506,6 +510,32 @@ def create_default_map_html():
         zoom_start=6,
         tiles='OpenStreetMap'
     )
+    
+    # Add base layers
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="ESRI Satellite",
+        name="Satellite",
+        overlay=False,
+        control=True
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="OpenStreetMap",
+        overlay=False,
+        control=True
+    ).add_to(m)        
+
+    if st.session_state.THUNDERFOREST_API_KEY:
+        folium.TileLayer(
+            tiles=f"https://tile.thunderforest.com/transport/{{z}}/{{x}}/{{y}}.png?apikey={st.session_state.THUNDERFOREST_API_KEY}",
+            attr='Transport Map © Thunderforest, OpenStreetMap contributors',
+            name='Transport Map',
+            overlay=False,
+            control=True
+        ).add_to(m)
+    
     return m._repr_html_()
 
 def get_map_html():
