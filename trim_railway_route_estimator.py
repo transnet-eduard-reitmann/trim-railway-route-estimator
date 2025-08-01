@@ -35,7 +35,7 @@ if 'IS_LOCAL_DEV' not in st.session_state:
         st.session_state.IS_LOCAL_DEV = False
 
 # Select number of waypoints to use in GUI
-number_of_waypoints = 3
+number_of_waypoints = 4
 
 # Set page config
 st.set_page_config(
@@ -638,6 +638,229 @@ def get_map_html():
     
     return st.session_state.cached_map_html
 
+# # Main app
+# def main():
+#     st.title("🚂 TRIM Railway Route Estimator")
+#     st.markdown("---")
+    
+#     # Add memory management section
+#     col_mem1, col_mem2 = st.columns([3, 1])
+#     with col_mem1:
+#         if st.session_state.IS_LOCAL_DEV:
+#             st.info("🏠 **Local Development Mode**: Network files kept in memory for maximum performance.")
+#         else:
+#             st.info("☁️ **Cloud Mode**: Network files loaded temporarily during calculations to optimize memory usage.")
+#     with col_mem2:
+#         if st.button("🗑️ Clear Cache", help="Clear all cached data to free memory"):
+#             st.cache_data.clear()
+#             clear_graph_data()
+#             st.session_state.cached_map_html = None
+#             st.session_state.map_needs_update = True
+#             st.success("Cache cleared!")
+    
+#     # Load data files
+#     with st.spinner("Loading configuration files..."):
+#         # Always load lightweight config files
+#         if st.session_state.waypoints_df is None:
+#             st.session_state.waypoints_df = load_excel_data("waypoints.xlsx")
+        
+#         if st.session_state.access_rates_df is None:
+#             st.session_state.access_rates_df = load_excel_data("access_rates.xlsx")
+        
+#         # In local development, preload heavy graph files for performance
+#         if st.session_state.IS_LOCAL_DEV:
+#             if st.session_state.railway_detailed is None:
+#                 st.session_state.railway_detailed = load_network_data("south_africa_railway_detailed.lz4")
+            
+#             if st.session_state.railway_simple is None:
+#                 st.session_state.railway_simple = load_network_data("south_africa_railway_simple.lz4")
+    
+#     # Main content area
+#     col1, col2 = st.columns(2)
+    
+#     # Waypoint routing section
+#     with col1:
+#         st.subheader("📍 Waypoint Routing")
+        
+#         waypoint_names = []
+#         if st.session_state.waypoints_df is not None and 'name' in st.session_state.waypoints_df.columns:
+#             waypoint_names = st.session_state.waypoints_df['name'].unique().tolist()
+        
+#         def get_waypoint_coordinates(selected_waypoint):
+#             if selected_waypoint and st.session_state.waypoints_df is not None:
+#                 waypoint_data = st.session_state.waypoints_df[
+#                     st.session_state.waypoints_df['name'] == selected_waypoint
+#                 ].iloc[0]
+                
+#                 if 'latitude' in waypoint_data and 'longitude' in waypoint_data:
+#                     return f"{waypoint_data['latitude']}, {waypoint_data['longitude']}"
+#             return ""
+        
+#         for i in range(1, number_of_waypoints + 1):
+            
+#             cols = st.columns([4, 3, 1])
+            
+#             with cols[0]:
+#                 if waypoint_names:
+#                     selected_waypoint = st.selectbox(
+#                         f"Waypoint {i}:",
+#                         options=[""] + waypoint_names,
+#                         key=f"waypoint_select_{i}",
+#                         help=f"Select waypoint {i} for routing"
+#                     )
+#                 else:
+#                     selected_waypoint = st.selectbox(
+#                         f"Waypoint {i}:",
+#                         options=["No waypoints available"],
+#                         key=f"waypoint_select_{i}",
+#                         disabled=True
+#                     )                
+#                 coordinates_value = get_waypoint_coordinates(selected_waypoint) if selected_waypoint else ""
+            
+#             with cols[1]:
+#                 st.text_input(
+#                     f"Coordinates {i} (Lat, Lon):",
+#                     value=coordinates_value,
+#                     key=f"coordinates_input_{i}",
+#                     help="Format: latitude, longitude"
+#                 )
+            
+#             with cols[2]:
+#                 st.button("🗺️", key=f"pick_coordinate_button_{i}")                
+            
+#             if i < number_of_waypoints:
+#                 st.markdown("")
+           
+#         st.markdown("")
+#         if st.button("🗺️ Calculate Route", key="calculate_route_btn", use_container_width=True):
+#             calculate_route()
+            
+#         if st.session_state.route_calculation_result:
+#             st.markdown(st.session_state.route_calculation_result)    
+            
+#     # Access rates information
+#     with col2:
+#         st.subheader("💰 Access Rate Details")
+        
+#         access_categories = []
+#         selected_category = None
+        
+#         cols = st.columns([3, 1])
+        
+#         if st.session_state.access_rates_df is not None:
+#             if 'Category' in st.session_state.access_rates_df.columns:
+#                 access_categories = st.session_state.access_rates_df['Category'].unique().tolist()
+#                 with cols[0]:
+#                     selected_category = st.selectbox(
+#                         "Select Access Rate Category:",
+#                         options=access_categories,
+#                         key="access_rate_select"
+#                     )
+#             else:
+#                 st.error("'Category' column not found in access rates data")
+#         else:
+#             st.error("Access rates data not loaded")
+        
+#         with cols[1]:
+#             st.selectbox(
+#                 "Electric locomotives:",
+#                 options=['Yes', 'No'],
+#                 key="electric_locomotives_select"
+#             )
+        
+#         st.markdown("")
+        
+#         if selected_category and st.session_state.access_rates_df is not None:
+#             rate_data = st.session_state.access_rates_df[
+#                 st.session_state.access_rates_df['Category'] == selected_category
+#             ].iloc[0]
+            
+#             required_columns = [
+#                 "Tariff per Trainkm (Rand)",
+#                 "Tariff per GTK (cents)",
+#                 "E Rate per GTK (Cents)"
+#             ]
+            
+#             cols = st.columns(len(required_columns))
+#             k = 0            
+#             for col_name in required_columns:
+#                 if col_name in rate_data:                    
+#                     with cols[k]:
+#                         k = k + 1
+#                         st.text_input(
+#                             col_name,
+#                             value=str(rate_data[col_name]),
+#                             key=f"rate_{col_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
+#                         )
+#                 else:
+#                     st.error(f"Column '{col_name}' not found in access rates data")
+#         else:
+#             for col_name in ["Tariff per Trainkm (Rand)", "Tariff per GTK (cents)", "E-Rate (Cents/GTK)"]:
+#                 st.text_input(
+#                     col_name,
+#                     value="",
+#                     disabled=True,
+#                     help="Select an access rate category to see values"
+#                 ) 
+          
+#         st.text_input(
+#             "Trip distance [km]:",            
+#             key="trip_distance",
+#             help="Total trip distance in km"
+#         ) 
+        
+#         cols = st.columns(3)
+         
+#         with cols[0]:
+#             st.text_input(
+#                 "Loaded train mass [ton]:",
+#                 value="1000",
+#                 key="loaded_train_mass",
+#                 help="Empty train mass in ton"
+#             )
+#         with cols[1]:    
+#             st.text_input(
+#                 "Empty train mass [ton]:",
+#                 value="500",
+#                 key="empty_train_mass",
+#                 help="Empty train massin ton"
+#             )
+#         with cols[2]:
+#             st.text_input(
+#                 "Annual volume [ton]:",
+#                 value="20000",
+#                 key="annual_volume",
+#                 help="Annual volume in ton"
+#             )
+         
+#         st.markdown("")
+#         if st.button("💲 Calculate Rate", key="calculate_rate_btn", use_container_width=True):
+#             calculate_rate()
+            
+#         if st.session_state.rates_calculation_result:
+#             st.markdown(st.session_state.rates_calculation_result) 
+            
+#             st.checkbox("Display breakdown of rates calculation results:", value=False, key="display_breakdown")
+    
+#     # Show route distance if calculated
+#     if st.session_state.route_calculated and st.session_state.route_distance:
+#         st.info(f"Current route distance: {st.session_state.route_distance/1000:.2f} km")
+        
+#     # Detailed breakdown of rates calculation (dataframe)
+#     if st.session_state.rates_calculation_result and st.session_state.display_breakdown:
+#         st.dataframe(st.session_state.rates_calculation_df[0]) 
+#         st.dataframe(st.session_state.rates_calculation_df[1]) 
+#         st.dataframe(st.session_state.rates_calculation_df[2])    
+    
+#     # Full-width map section
+#     st.markdown("---")
+#     st.subheader("🗺️ Railway Route Map")
+    
+#     # Display cached map HTML
+#     map_html = get_map_html()
+#     st.components.v1.html(map_html, height=600)    
+
+
 # Main app
 def main():
     st.title("🚂 TRIM Railway Route Estimator")
@@ -679,7 +902,7 @@ def main():
     col1, col2 = st.columns(2)
     
     # Waypoint routing section
-    with col1:
+    with st.sidebar:
         st.subheader("📍 Waypoint Routing")
         
         waypoint_names = []
@@ -739,108 +962,108 @@ def main():
             st.markdown(st.session_state.route_calculation_result)    
             
     # Access rates information
-    with col2:
-        st.subheader("💰 Access Rate Details")
+    st.subheader("💰 Access Rate Details")
+    
+    access_categories = []
+    selected_category = None
+    
+    cols = st.columns([3, 1])
+    
+    if st.session_state.access_rates_df is not None:
+        if 'Category' in st.session_state.access_rates_df.columns:
+            access_categories = st.session_state.access_rates_df['Category'].unique().tolist()
+            with cols[0]:
+                selected_category = st.selectbox(
+                    "Select Access Rate Category:",
+                    options=access_categories,
+                    key="access_rate_select"
+                )
+        else:
+            st.error("'Category' column not found in access rates data")
+    else:
+        st.error("Access rates data not loaded")
+    
+    with cols[1]:
+        st.selectbox(
+            "Electric locomotives:",
+            options=['Yes', 'No'],
+            key="electric_locomotives_select"
+        )
+    
+    st.markdown("")
+    
+    if selected_category and st.session_state.access_rates_df is not None:
+        rate_data = st.session_state.access_rates_df[
+            st.session_state.access_rates_df['Category'] == selected_category
+        ].iloc[0]
         
-        access_categories = []
-        selected_category = None
+        required_columns = [
+            "Tariff per Trainkm (Rand)",
+            "Tariff per GTK (cents)",
+            "E Rate per GTK (Cents)"
+        ]
         
-        cols = st.columns([3, 1])
-        
-        if st.session_state.access_rates_df is not None:
-            if 'Category' in st.session_state.access_rates_df.columns:
-                access_categories = st.session_state.access_rates_df['Category'].unique().tolist()
-                with cols[0]:
-                    selected_category = st.selectbox(
-                        "Select Access Rate Category:",
-                        options=access_categories,
-                        key="access_rate_select"
+        cols = st.columns(len(required_columns))
+        k = 0            
+        for col_name in required_columns:
+            if col_name in rate_data:                    
+                with cols[k]:
+                    k = k + 1
+                    st.text_input(
+                        col_name,
+                        value=str(rate_data[col_name]),
+                        key=f"rate_{col_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
                     )
             else:
-                st.error("'Category' column not found in access rates data")
-        else:
-            st.error("Access rates data not loaded")
-        
-        with cols[1]:
-            st.selectbox(
-                "Electric locomotives:",
-                options=['Yes', 'No'],
-                key="electric_locomotives_select"
-            )
-        
-        st.markdown("")
-        
-        if selected_category and st.session_state.access_rates_df is not None:
-            rate_data = st.session_state.access_rates_df[
-                st.session_state.access_rates_df['Category'] == selected_category
-            ].iloc[0]
-            
-            required_columns = [
-                "Tariff per Trainkm (Rand)",
-                "Tariff per GTK (cents)",
-                "E Rate per GTK (Cents)"
-            ]
-            
-            cols = st.columns(len(required_columns))
-            k = 0            
-            for col_name in required_columns:
-                if col_name in rate_data:                    
-                    with cols[k]:
-                        k = k + 1
-                        st.text_input(
-                            col_name,
-                            value=str(rate_data[col_name]),
-                            key=f"rate_{col_name.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
-                        )
-                else:
-                    st.error(f"Column '{col_name}' not found in access rates data")
-        else:
-            for col_name in ["Tariff per Trainkm (Rand)", "Tariff per GTK (cents)", "E-Rate (Cents/GTK)"]:
-                st.text_input(
-                    col_name,
-                    value="",
-                    disabled=True,
-                    help="Select an access rate category to see values"
-                ) 
-          
+                st.error(f"Column '{col_name}' not found in access rates data")
+    else:
+        for col_name in ["Tariff per Trainkm (Rand)", "Tariff per GTK (cents)", "E-Rate (Cents/GTK)"]:
+            st.text_input(
+                col_name,
+                value="",
+                disabled=True,
+                help="Select an access rate category to see values"
+            ) 
+      
+    st.text_input(
+        "Trip distance [km]:",            
+        key="trip_distance",
+        help="Total trip distance in km"
+    ) 
+    
+    cols = st.columns(3)
+     
+    with cols[0]:
         st.text_input(
-            "Trip distance [km]:",            
-            key="trip_distance",
-            help="Total trip distance in km"
-        ) 
+            "Loaded train mass [ton]:",
+            value="1000",
+            key="loaded_train_mass",
+            help="Empty train mass in ton"
+        )
+    with cols[1]:    
+        st.text_input(
+            "Empty train mass [ton]:",
+            value="500",
+            key="empty_train_mass",
+            help="Empty train massin ton"
+        )
+    with cols[2]:
+        st.text_input(
+            "Annual volume [ton]:",
+            value="20000",
+            key="annual_volume",
+            help="Annual volume in ton"
+        )
+     
+    st.markdown("")
+    if st.button("💲 Calculate Rate", key="calculate_rate_btn", use_container_width=True):
+        calculate_rate()
         
-        cols = st.columns(3)
-         
-        with cols[0]:
-            st.text_input(
-                "Loaded train mass [ton]:",
-                value="1000",
-                key="loaded_train_mass",
-                help="Empty train mass in ton"
-            )
-        with cols[1]:    
-            st.text_input(
-                "Empty train mass [ton]:",
-                value="500",
-                key="empty_train_mass",
-                help="Empty train massin ton"
-            )
-        with cols[2]:
-            st.text_input(
-                "Annual volume [ton]:",
-                value="20000",
-                key="annual_volume",
-                help="Annual volume in ton"
-            )
-         
-        st.markdown("")
-        if st.button("💲 Calculate Rate", key="calculate_rate_btn", use_container_width=True):
-            calculate_rate()
-            
-        if st.session_state.rates_calculation_result:
-            st.markdown(st.session_state.rates_calculation_result) 
-            
-            st.checkbox("Display breakdown of rates calculation results:", value=False, key="display_breakdown")
+    if st.session_state.rates_calculation_result:
+        st.markdown(st.session_state.rates_calculation_result) 
+        
+        st.checkbox("Display breakdown of rates calculation results:", value=False, key="display_breakdown")
+        
     
     # Show route distance if calculated
     if st.session_state.route_calculated and st.session_state.route_distance:
@@ -858,7 +1081,9 @@ def main():
     
     # Display cached map HTML
     map_html = get_map_html()
-    st.components.v1.html(map_html, height=600)    
+    st.components.v1.html(map_html, height=600) 
+
+
 
 if __name__ == "__main__":
     main()
